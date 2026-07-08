@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FX Triangular-Arbitrage Paper Book</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b0d10;
+    --panel:#12161b;
+    --line:#1f262d;
+    --ink:#dfe6ea;
+    --dim:#7a8791;
+    --long:#3ecf8e;
+    --short:#e2574c;
+    --flat:#d9a441;
+    --accent:#5b8def;
+    --mono:'IBM Plex Mono','SF Mono',Consolas,monospace;
+    --sans:'Inter',-apple-system,Segoe UI,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{background:var(--bg); color:var(--ink); font-family:var(--sans); margin:0; padding:32px 24px 80px; min-height:100vh;}
+  .wrap{max-width:1120px; margin:0 auto;}
+  header{display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:28px; flex-wrap:wrap; gap:12px;}
+  h1{font-size:20px; font-weight:600; margin:0; letter-spacing:.2px;}
+  .sub{color:var(--dim); font-size:12.5px; margin-top:4px; font-family:var(--mono);}
+  #asof{font-family:var(--mono); font-size:12px; color:var(--dim); text-align:right;}
+  #asof b{color:var(--ink); font-weight:600;}
+  .stat-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(135px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:20px;}
+  .stat{background:var(--panel); padding:14px 16px;}
+  .stat .label{font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--dim); margin-bottom:6px;}
+  .stat .value{font-family:var(--mono); font-size:19px; font-weight:600;}
+  .pos{color:var(--long);} .neg{color:var(--short);} .neutral{color:var(--flat);}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px 18px 8px; margin-bottom:20px;}
+  .panel h2{font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--dim); margin:0 0 12px; font-weight:600;}
+  .chart-box{position:relative; height:260px;}
+  .chart-box.small{height:170px;}
+  .grid-2{display:grid; grid-template-columns:1.35fr 1fr; gap:20px;}
+  @media (max-width:760px){.grid-2{grid-template-columns:1fr;} body{padding:24px 14px 64px;}}
+  table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12.5px;}
+  th,td{text-align:left; padding:7px 6px; border-bottom:1px solid var(--line);}
+  th{color:var(--dim); font-weight:500; text-transform:uppercase; font-size:10.5px; letter-spacing:.5px;}
+  tr:last-child td{border-bottom:none;}
+  .meter{height:14px; background:#1a2027; border-radius:4px; overflow:hidden; position:relative;}
+  .meter span{display:block; height:100%; background:var(--accent);}
+  .empty{color:var(--dim); font-family:var(--mono); font-size:13px; padding:40px 0; text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>FX Triangular-Arbitrage Paper Book</h1>
+      <div class="sub">EURUSD / USDINR / EURINR | weekly XGBoost retrain | next-day exposure</div>
+    </div>
+    <div id="asof">loading...</div>
+  </header>
+
+  <div id="content">
+    <div class="empty">Loading logs...</div>
+  </div>
+</div>
+
+<script>
+const FMT_PCT = (x, d=2) => Number.isFinite(x) ? (x*100).toFixed(d) + '%' : '-';
+const FMT_NUM = (x, d=4) => Number.isFinite(x) ? x.toFixed(d) : '-';
+
+async function loadCSV(path){
+  const res = await fetch(path + '?_=' + Date.now());
+  if(!res.ok) return [];
+  const text = (await res.text()).trim();
+  if(!text) return [];
+  const lines = text.split('\n');
+  if(lines.length < 2) return [];
+  const headers = lines[0].split(',');
+  return lines.slice(1).filter(Boolean).map(line => {
+    const cells = line.split(',');
+    const row = {};
+    headers.forEach((h,i)=> row[h] = cells[i]);
+    return row;
+  });
+}
+
+function num(row, key){
+  const value = parseFloat(row[key]);
+  return Number.isFinite(value) ? value : NaN;
+}
+
+function metrics(rows){
+  const realized = rows.filter(r => Number.isFinite(num(r, 'realized_return')));
+  if(realized.length === 0) return null;
+  const rets = realized.map(r => num(r, 'realized_return'));
+  const n = rets.length;
+  const mean = rets.reduce((a,b)=>a+b,0)/n;
+  const variance = rets.reduce((a,b)=>a+(b-mean)**2,0)/Math.max(n-1,1);
+  const downside = rets.filter(x => x < 0);
+  const downsideMean = downside.length ? downside.reduce((a,b)=>a+b,0)/downside.length : 0;
+  const downsideVariance = downside.reduce((a,b)=>a+(b-downsideMean)**2,0)/Math.max(downside.length-1,1);
+  const annRet = mean*252;
+  const annVol = Math.sqrt(variance)*Math.sqrt(252);
+  const sharpe = annVol > 0 ? annRet/annVol : 0;
+  const downsideVol = Math.sqrt(downsideVariance)*Math.sqrt(252);
+  const sortino = downsideVol > 0 ? annRet/downsideVol : 0;
+  let peak = 1;
+  let mdd = 0;
+  realized.forEach(r => {
+    const eq = num(r, 'equity');
+    peak = Math.max(peak, eq);
+    mdd = Math.min(mdd, eq/peak - 1);
+  });
+  const totalReturn = num(realized[realized.length-1], 'equity') - 1;
+  const active = realized.filter(r => Math.abs(num(r, 'exposure')) > 1e-8 || Math.abs(num(r, 'realized_return')) > 1e-8);
+  const wins = active.filter(r => num(r, 'realized_return') > 0).length;
+  const winRate = active.length ? wins/active.length : 0;
+  const turnovers = rows.map(r => num(r, 'turnover')).filter(Number.isFinite);
+  const avgTurnover = turnovers.length ? turnovers.reduce((a,b)=>a+b,0)/turnovers.length : 0;
+  const totalTurnover = turnovers.reduce((a,b)=>a+b,0);
+  const rollingSharpe = realized.map((r, i) => {
+    const window = realized.slice(Math.max(0, i-29), i+1).map(x => num(x, 'realized_return'));
+    if(window.length < 10) return {date:r.date, value:NaN};
+    const wMean = window.reduce((a,b)=>a+b,0)/window.length;
+    const wVar = window.reduce((a,b)=>a+(b-wMean)**2,0)/Math.max(window.length-1,1);
+    const wStd = Math.sqrt(wVar);
+    return {date:r.date, value:wStd > 0 ? (wMean/wStd)*Math.sqrt(252) : 0};
+  });
+  const lastRolling = rollingSharpe.length ? rollingSharpe[rollingSharpe.length-1].value : NaN;
+  return {realized, n, annRet, annVol, sharpe, sortino, mdd, totalReturn, winRate, avgTurnover, totalTurnover, rollingSharpe, lastRolling};
+}
+
+function render(rows){
+  const content = document.getElementById('content');
+  if(rows.length === 0){
+    content.innerHTML = '<div class="empty">No FX paper-trading rows logged yet. Run the workflow once to create the bootstrap decision.</div>';
+    document.getElementById('asof').innerHTML = '';
+    return;
+  }
+
+  const last = rows[rows.length-1];
+  const m = metrics(rows);
+  document.getElementById('asof').innerHTML =
+    `updated through <b>${last.date}</b><br>` +
+    `<span>${last.trained_week || ''} | trained through ${last.trained_through || '-'}</span>`;
+
+  const exposure = num(last, 'exposure');
+  const signalLabel = exposure > 0 ? 'Long spread' : exposure < 0 ? 'Short spread' : 'Flat';
+  const signalClass = exposure > 0 ? 'pos' : exposure < 0 ? 'neg' : 'neutral';
+  const realizedRows = m ? m.realized : [];
+
+  content.innerHTML = `
+    <div class="stat-row">
+      <div class="stat"><div class="label">Equity</div><div class="value">${m ? FMT_NUM(num(realizedRows[realizedRows.length-1], 'equity')) : '1.0000'}</div></div>
+      <div class="stat"><div class="label">Total Return</div><div class="value ${m && m.totalReturn >= 0 ? 'pos' : 'neg'}">${m ? FMT_PCT(m.totalReturn) : '-'}</div></div>
+      <div class="stat"><div class="label">Ann. Return</div><div class="value ${m && m.annRet >= 0 ? 'pos' : 'neg'}">${m ? FMT_PCT(m.annRet) : '-'}</div></div>
+      <div class="stat"><div class="label">Ann. Vol</div><div class="value">${m ? FMT_PCT(m.annVol) : '-'}</div></div>
+      <div class="stat"><div class="label">Sharpe</div><div class="value">${m ? FMT_NUM(m.sharpe, 2) : '-'}</div></div>
+      <div class="stat"><div class="label">Sortino</div><div class="value">${m ? FMT_NUM(m.sortino, 2) : '-'}</div></div>
+      <div class="stat"><div class="label">Max Drawdown</div><div class="value neg">${m ? FMT_PCT(m.mdd) : '-'}</div></div>
+      <div class="stat"><div class="label">Win Rate</div><div class="value">${m ? FMT_PCT(m.winRate, 1) : '-'}</div></div>
+      <div class="stat"><div class="label">Avg Turnover</div><div class="value">${m ? FMT_NUM(m.avgTurnover, 2) + 'x' : '-'}</div></div>
+      <div class="stat"><div class="label">30D Sharpe</div><div class="value">${m ? FMT_NUM(m.lastRolling, 2) : '-'}</div></div>
+      <div class="stat"><div class="label">Current Signal</div><div class="value ${signalClass}">${signalLabel}</div></div>
+      <div class="stat"><div class="label">Exposure</div><div class="value ${signalClass}">${FMT_NUM(exposure, 2)}x</div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Equity Curve</h2>
+        <div class="chart-box"><canvas id="equityChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Current Probability Filter</h2>
+        <div style="font-family:var(--mono); margin-bottom:10px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Favorable probability</span><span>${FMT_PCT(num(last, 'prob'), 1)}</span></div>
+          <div class="meter"><span style="width:${Math.max(0, Math.min(100, num(last, 'prob')*100))}%"></span></div>
+        </div>
+        <h2 style="margin-top:18px;">Current Spread State</h2>
+        <table>
+          <tbody>
+            <tr><td>Spread z-score</td><td class="${num(last, 'spread_z') >= 0 ? 'pos' : 'neg'}">${FMT_NUM(num(last, 'spread_z'), 2)}</td></tr>
+            <tr><td>Entry threshold</td><td>${FMT_NUM(num(last, 'z_entry_dynamic'), 2)}</td></tr>
+            <tr><td>Capital weight</td><td>${FMT_NUM(num(last, 'capital_weight'), 2)}x</td></tr>
+            <tr><td>Prob threshold</td><td>${FMT_PCT(num(last, 'prob_thresh'), 1)}</td></tr>
+            <tr><td>Reset threshold</td><td>${FMT_PCT(num(last, 'prob_reset_thresh'), 1)}</td></tr>
+            <tr><td>Validation Sharpe</td><td>${FMT_NUM(num(last, 'threshold_validation_sharpe'), 2)}</td></tr>
+            <tr><td>Turnover</td><td>${FMT_NUM(num(last, 'turnover'), 2)}x</td></tr>
+            <tr><td>Retrained today</td><td>${String(last.retrained).toLowerCase() === 'true' ? 'yes' : 'no'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Exposure</h2>
+        <div class="chart-box small"><canvas id="exposureChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Spread Z-Score</h2>
+        <div class="chart-box small"><canvas id="spreadChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Rolling 30-Day Sharpe</h2>
+        <div class="chart-box small"><canvas id="rollingSharpeChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Risk Controls</h2>
+        <table>
+          <tbody>
+            <tr><td>Drawdown</td><td class="${num(last, 'drawdown') < 0 ? 'neg' : 'pos'}">${FMT_PCT(num(last, 'drawdown'))}</td></tr>
+            <tr><td>Peak equity</td><td>${FMT_NUM(num(last, 'peak_equity'))}</td></tr>
+            <tr><td>Consecutive losses</td><td>${parseInt(last.consecutive_losses || '0', 10)}</td></tr>
+            <tr><td>Cooldown days</td><td>${parseInt(last.cooldown_days_remaining || '0', 10)}</td></tr>
+            <tr><td>Hard stop</td><td>${String(last.risk_stop_active).toLowerCase() === 'true' ? 'active' : 'off'}</td></tr>
+            <tr><td>Risk reason</td><td>${last.risk_reason || '-'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Recent Activity</h2>
+      <table>
+        <thead><tr><th>Date</th><th>Return</th><th>Equity</th><th>Prob</th><th>Signal</th><th>Exposure</th><th>Risk</th><th>Retrain</th></tr></thead>
+        <tbody>
+          ${rows.slice(-18).reverse().map(r => {
+            const ret = num(r, 'realized_return');
+            const exp = num(r, 'exposure');
+            return `<tr>
+              <td>${r.date}</td>
+              <td class="${ret >= 0 ? 'pos' : 'neg'}">${Number.isFinite(ret) ? FMT_PCT(ret) : 'bootstrap'}</td>
+              <td>${FMT_NUM(num(r, 'equity'))}</td>
+              <td>${FMT_PCT(num(r, 'prob'), 1)}</td>
+              <td>${parseInt(r.signal || '0', 10)}</td>
+              <td class="${exp >= 0 ? 'pos' : 'neg'}">${FMT_NUM(exp, 2)}x</td>
+              <td>${r.risk_action || '-'}</td>
+              <td>${String(r.retrained).toLowerCase() === 'true' ? 'yes' : 'no'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const equityRows = realizedRows.length ? realizedRows : rows;
+  new Chart(document.getElementById('equityChart'), {
+    type:'line',
+    data:{labels:equityRows.map(r=>r.date), datasets:[{data:equityRows.map(r=>num(r,'equity')), borderColor:'#5b8def', backgroundColor:'rgba(91,141,239,0.08)', fill:true, pointRadius:0, borderWidth:1.6, tension:0.15}]},
+    options:{plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#7a8791', maxTicksLimit:8, font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}, y:{ticks:{color:'#7a8791', font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}}}
+  });
+
+  new Chart(document.getElementById('exposureChart'), {
+    type:'line',
+    data:{labels:rows.map(r=>r.date), datasets:[{data:rows.map(r=>num(r,'exposure')), borderColor:'#3ecf8e', pointRadius:0, borderWidth:1.4}]},
+    options:{plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#7a8791', maxTicksLimit:8, font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}, y:{ticks:{color:'#7a8791', font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}}}
+  });
+
+  new Chart(document.getElementById('spreadChart'), {
+    type:'line',
+    data:{labels:rows.map(r=>r.date), datasets:[{data:rows.map(r=>num(r,'spread_z')), borderColor:'#d9a441', pointRadius:0, borderWidth:1.4}]},
+    options:{plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#7a8791', maxTicksLimit:8, font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}, y:{ticks:{color:'#7a8791', font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}}}
+  });
+
+  new Chart(document.getElementById('rollingSharpeChart'), {
+    type:'line',
+    data:{labels:(m ? m.rollingSharpe : []).map(r=>r.date), datasets:[{data:(m ? m.rollingSharpe : []).map(r=>r.value), borderColor:'#5b8def', pointRadius:0, borderWidth:1.4}]},
+    options:{plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#7a8791', maxTicksLimit:8, font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}, y:{ticks:{color:'#7a8791', font:{family:'monospace', size:10}}, grid:{color:'#1f262d'}}}}
+  });
+}
+
+(async function(){
+  const rows = await loadCSV('./data/trade_log.csv');
+  render(rows);
+})();
+</script>
+</body>
+</html>
