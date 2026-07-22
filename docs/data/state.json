@@ -8,7 +8,7 @@
   "cooldown_days_remaining": 0,
   "risk_stop_active": false,
   "risk_reason": "consecutive_losses",
-  "last_decision_date": "2026-07-20",
+  "last_decision_date": "2026-07-22",
   "last_train_week": "2026-W30",
   "last_train_date": "2026-07-20"
 }
