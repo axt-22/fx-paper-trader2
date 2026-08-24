@@ -2,13 +2,13 @@
   "prev_exposure": 2.0,
   "prev_prob_signal": 1,
   "pending_cost": 0.0,
-  "equity": 0.9661226660897719,
+  "equity": 0.9637215817867538,
   "peak_equity": 1.0,
-  "consecutive_losses": 0,
+  "consecutive_losses": 1,
   "cooldown_days_remaining": 0,
   "risk_stop_active": false,
   "risk_reason": "consecutive_losses",
-  "last_decision_date": "2026-08-21",
-  "last_train_week": "2026-W34",
-  "last_train_date": "2026-08-17"
+  "last_decision_date": "2026-08-24",
+  "last_train_week": "2026-W35",
+  "last_train_date": "2026-08-24"
 }
