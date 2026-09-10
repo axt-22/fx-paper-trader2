@@ -4,11 +4,11 @@
   "pending_cost": 0.0,
   "equity": 0.9301947691937762,
   "peak_equity": 1.0,
-  "consecutive_losses": 1,
+  "consecutive_losses": 0,
   "cooldown_days_remaining": 0,
   "risk_stop_active": false,
   "risk_reason": "consecutive_losses",
-  "last_decision_date": "2026-09-09",
+  "last_decision_date": "2026-09-10",
   "last_train_week": "2026-W37",
   "last_train_date": "2026-09-07"
 }
