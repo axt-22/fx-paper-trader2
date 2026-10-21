@@ -1,14 +1,14 @@
 {
-  "prev_exposure": 1.7439005970954895,
+  "prev_exposure": 1.47093280351055,
   "prev_prob_signal": 1,
-  "pending_cost": 0.0,
-  "equity": 1.0001534847931322,
+  "pending_cost": 8.189033807548184e-05,
+  "equity": 1.0031288042545596,
   "peak_equity": 1.0094372112435974,
   "consecutive_losses": 0,
   "cooldown_days_remaining": 0,
   "risk_stop_active": false,
   "risk_reason": "consecutive_losses",
-  "last_decision_date": "2026-10-19",
+  "last_decision_date": "2026-10-20",
   "last_train_week": "2026-W43",
   "last_train_date": "2026-10-19"
 }
